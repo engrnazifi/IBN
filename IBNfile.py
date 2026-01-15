@@ -330,7 +330,7 @@ OTP_ADMIN_ID = 6603268127
 
 
 BOT_USERNAME = "Aslamtv2bot"
-CHANNEL = "@Aslammovieschannel"
+CHANNEL = "@buydatachannel"
 
 # Flutterwave
 FLW_PUBLIC_KEY = os.getenv("FLW_PUBLIC_KEY")
@@ -362,29 +362,51 @@ app = Flask(__name__)
 
 
 import uuid
+import requests
+import json
 
-# ========= FLUTTERWAVE PAYMENT (FIXED & SAFE) =========
+# ========= FLUTTERWAVE PAYMENT (TELEGRAM DEBUG) =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
+    logs = []
+    def log(x):
+        logs.append(str(x))
+
+    log("🧪 FLUTTERWAVE DEBUG START")
+
+    # 🔍 ENV CHECK
+    log(f"SECRET KEY OK: {bool(FLW_SECRET_KEY)}")
+    log(f"REDIRECT URL: {FLW_REDIRECT_URL}")
+    log(f"FLW BASE: {FLW_BASE}")
+
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
-        print("❌ Flutterwave env missing")
+        bot.send_message(user_id, "❌ ENV MISSING")
         return None
 
-    # 🛑 Flutterwave minimum amount (NGN)
-    if int(amount) < 100:
-        print("❌ Amount too small:", amount)
+    # 🔍 AMOUNT CHECK
+    try:
+        amount = int(amount)
+    except Exception as e:
+        bot.send_message(user_id, f"❌ AMOUNT CAST ERROR: {e}")
         return None
+
+    log(f"AMOUNT: ₦{amount}")
+
+    if amount < 100:
+        bot.send_message(user_id, "❌ Flutterwave minimum is ₦100")
+        return None
+
+    # 🔐 UNIQUE tx_ref
+    tx_ref = f"tg_{uuid.uuid4().hex}"
+    log(f"TX_REF: {tx_ref}")
 
     headers = {
         "Authorization": f"Bearer {FLW_SECRET_KEY}",
         "Content-Type": "application/json"
     }
 
-    # 🔐 UNIQUE tx_ref (NO COLLISION – EVER)
-    tx_ref = f"tg_{uuid.uuid4().hex}"
-
     payload = {
         "tx_ref": tx_ref,
-        "amount": int(amount),
+        "amount": amount,
         "currency": "NGN",
         "redirect_url": FLW_REDIRECT_URL,
         "customer": {
@@ -392,29 +414,50 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
             "name": f"TG User {user_id}"
         },
         "customizations": {
-            "title": title[:50],
+            "title": str(title)[:50],
             "description": f"Order {order_id}"
         }
     }
 
+    log("PAYLOAD:")
+    log(json.dumps(payload, indent=2))
+
     try:
         r = requests.post(
             f"{FLW_BASE}/payments",
-            json=payload,
             headers=headers,
+            json=payload,
             timeout=30
         )
 
+        log(f"STATUS CODE: {r.status_code}")
+        log("RAW RESPONSE:")
+        log(r.text)
+
         data = r.json()
+        log("PARSED RESPONSE:")
+        log(json.dumps(data, indent=2))
+
+        # 📤 SEND DEBUG TO TELEGRAM
+        bot.send_message(
+            user_id,
+            "```\n" + "\n".join(logs) + "\n```",
+            parse_mode="Markdown"
+        )
 
         if r.status_code != 200 or data.get("status") != "success":
-            print("❌ Flutterwave error:", data)
+            bot.send_message(user_id, "❌ Flutterwave rejected payment")
             return None
 
+        bot.send_message(user_id, "✅ Payment link created successfully")
         return data["data"]["link"]
 
     except Exception as e:
-        print("❌ create_flutterwave_payment error:", e)
+        bot.send_message(
+            user_id,
+            f"❌ REQUEST ERROR:\n```\n{e}\n```",
+            parse_mode="Markdown"
+        )
         return None
 
 # ========= HOME / KEEP ALIVE =========
