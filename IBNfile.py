@@ -360,20 +360,13 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # ========= FLASK =========
 app = Flask(__name__)
 
-import uuid
 import requests
 
-# ========= FLUTTERWAVE PAYMENT (CLEAN) =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
         return None
 
-    try:
-        amount = int(amount)
-    except:
-        return None
-
-    # 🛑 Flutterwave minimum (NGN)
+    amount = int(amount)
     if amount < 100:
         return None
 
@@ -382,11 +375,10 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
         "Content-Type": "application/json"
     }
 
-    # 🔐 UNIQUE tx_ref (SAFE – NO COLLISION)
-    tx_ref = f"tg_{uuid.uuid4().hex}"
-
     payload = {
-        "tx_ref": tx_ref,
+        # ✅ STABLE tx_ref (KADA YA CANZA)
+        "tx_ref": str(order_id),
+
         "amount": amount,
         "currency": "NGN",
         "redirect_url": FLW_REDIRECT_URL,
@@ -403,22 +395,22 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     try:
         r = requests.post(
             f"{FLW_BASE}/payments",
-            headers=headers,
             json=payload,
+            headers=headers,
             timeout=30
         )
 
-        if r.status_code != 200:
-            return None
-
         data = r.json()
-        if data.get("status") != "success":
+        if r.status_code != 200 or data.get("status") != "success":
             return None
 
         return data["data"]["link"]
 
-    except:
+    except Exception:
         return None
+
+
+
 
 
 # ========= HOME / KEEP ALIVE =========
