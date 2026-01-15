@@ -360,6 +360,9 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # ========= FLASK =========
 app = Flask(__name__)
 
+
+import time
+
 # ========= FLUTTERWAVE PAYMENT =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
@@ -372,7 +375,9 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     }
 
     payload = {
-        "tx_ref": str(order_id),
+        # ✅ GYARA ƊAYA KAWAI (SABON tx_ref)
+        "tx_ref": f"{order_id}-{int(time.time())}",
+
         "amount": int(amount),
         "currency": "NGN",
         "redirect_url": FLW_REDIRECT_URL,
@@ -405,6 +410,7 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     except Exception as e:
         print("❌ create_flutterwave_payment error:", e)
         return None
+
 
 # ========= HOME / KEEP ALIVE =========
 @app.route("/")
@@ -1705,7 +1711,7 @@ def reply_menu(uid=None):
 
     if uid in ADMINS:
        
-        kb.add(InlineKeyboardButton("☢SERIES & ADD", callback_data="groupitems"))
+        kb.add(InlineKeyboardButton("☢SERIES & ADD🎬", callback_data="groupitems"))
         kb.add(InlineKeyboardButton("🧹 ERASER", callback_data="eraser_menu"))
         kb.add(InlineKeyboardButton("📂WEAK UPDATE", callback_data="weak_update"))
         
