@@ -360,14 +360,10 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # ========= FLASK =========
 app = Flask(__name__)
 
-import requests
-
+# ========= FLUTTERWAVE PAYMENT =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
-        return None
-
-    amount = int(amount)
-    if amount < 100:
+        print("❌ Flutterwave env missing")
         return None
 
     headers = {
@@ -376,10 +372,8 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
     }
 
     payload = {
-        # ✅ STABLE tx_ref (KADA YA CANZA)
         "tx_ref": str(order_id),
-
-        "amount": amount,
+        "amount": int(amount),
         "currency": "NGN",
         "redirect_url": FLW_REDIRECT_URL,
         "customer": {
@@ -387,7 +381,7 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
             "name": f"TG User {user_id}"
         },
         "customizations": {
-            "title": str(title)[:50],
+            "title": title[:50],
             "description": f"Order {order_id}"
         }
     }
@@ -401,17 +395,16 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
         )
 
         data = r.json()
+
         if r.status_code != 200 or data.get("status") != "success":
+            print("❌ Flutterwave error:", data)
             return None
 
         return data["data"]["link"]
 
-    except Exception:
+    except Exception as e:
+        print("❌ create_flutterwave_payment error:", e)
         return None
-
-
-
-
 
 # ========= HOME / KEEP ALIVE =========
 @app.route("/")
@@ -1711,8 +1704,8 @@ def reply_menu(uid=None):
     )
 
     if uid in ADMINS:
-       
-        kb.add(InlineKeyboardButton("☢SERIES & ADD🎬", callback_data="groupitems"))
+        kb.add(InlineKeyboardButton("🏆ADD MOVIE", callback_data="addmovie"))
+        kb.add(InlineKeyboardButton("☢SERIES MODE", callback_data="groupitems"))
         kb.add(InlineKeyboardButton("🧹 ERASER", callback_data="eraser_menu"))
         kb.add(InlineKeyboardButton("📂WEAK UPDATE", callback_data="weak_update"))
         
@@ -2253,10 +2246,14 @@ def parse_caption_for_title_price(text):
 
 
 
+
+  
+
 @bot.message_handler(
     func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_states
 )
 def admin_inputs(message):
+
     try:
         state_entry = admin_states.get(message.from_user.id)
         if not state_entry:
@@ -2264,54 +2261,160 @@ def admin_inputs(message):
 
         state = state_entry.get("state")
 
-        # ⚠️ NOTE:
-        # An cire ADD MOVIE logic, amma sauran admin states
-        # (weak_update, update_week, da sauransu)
-        # suna nan a sauran code ɗinka
+ 
 
-        return
+        # ADD MOVIE FLOW
+        # =========================================================
+        if state not in ("add_movie_wait_file", "add_movie_wait_poster"):
+            return
+
+        # =====================================================
+        # STEP 1: WAIT FILE
+        # =====================================================
+        if state == "add_movie_wait_file":
+            file_id = None
+            file_name = None
+
+            if message.content_type == "video":
+                file_id = message.video.file_id
+            elif message.content_type == "document":
+                file_id = message.document.file_id
+                file_name = message.document.file_name
+            else:
+                bot.reply_to(
+                    message,
+                    "❌ Tura fim (video ko document kawai)."
+                )
+                return
+
+            admin_states[ADMIN_ID] = {
+                "state": "add_movie_wait_poster",
+                "temp_file_id": file_id,
+                "temp_file_name": file_name
+            }
+
+            bot.send_message(
+                ADMIN_ID,
+                "✅ Na karɓi fim.\n\n"
+                "Yanzu aika POSTER (hoto) tare da caption:\n"
+                "Misali: Fashin banki 200"
+            )
+            return
+
+        # =====================================================
+        # STEP 2: WAIT POSTER
+        # =====================================================
+        if state == "add_movie_wait_poster":
+            st = admin_states.get(ADMIN_ID)
+
+            if message.content_type not in ("photo", "video"):
+                bot.reply_to(
+                    message,
+                    "❌ Sai POSTER (hoto) ko SHORT VIDEO tare da caption."
+                )
+                return
+
+            title, price = parse_caption_for_title_price(message.caption or "")
+            if not title or not price:
+                bot.reply_to(message, "❌ Caption bai dace ba.")
+                return
+
+            poster_file_id = None
+            poster_type = None
+
+            if message.content_type == "photo":
+                poster_file_id = message.photo[-1].file_id
+                poster_type = "photo"
+            elif message.content_type == "video":
+                poster_file_id = message.video.file_id
+                poster_type = "video"
+
+            sent_movie = bot.send_document(STORAGE_CHANNEL, st["temp_file_id"])
+
+            storage_file_id = sent_movie.document.file_id
+            storage_msg_id = sent_movie.message_id
+            created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+            # ❌ AN HANA INSERT A MOVIES
+            # ❌ AN HANA INSERT A MOVIES
+            # ❌ AN HANA INSERT A MOVIES
+
+            cur = conn.execute(
+                """
+                INSERT INTO items
+                (title, price, file_id, file_name, created_at, channel_msg_id, channel_username)
+                VALUES (?,?,?,?,?,?,?)
+                """,
+                (
+                    title,
+                    price,
+                    storage_file_id,
+                    st.get("temp_file_name"),
+                    created_at,
+                    storage_msg_id,
+                    STORAGE_CHANNEL
+                )
+            )
+            item_id = cur.lastrowid
+            conn.commit()
+
+            caption = f"🎬 <b>{title}</b>\n💵Price:₦{price}"
+
+            # ⚠️ movie_buttons_inline BA A CANZA BA
+            markup = movie_buttons_inline(item_id, user_id=None)
+
+            if poster_type == "photo":
+                sent_poster = bot.send_photo(
+                    CHANNEL,
+                    poster_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+
+            if poster_type == "video":
+                sent_poster = bot.send_video(
+                    CHANNEL,
+                    poster_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=markup
+                )
+
+            conn.execute(
+                "UPDATE items SET channel_msg_id=? WHERE id=?",
+                (sent_poster.message_id, item_id)
+            )
+            conn.commit()
+
+            bot.send_message(ADMIN_ID, f"✅ An gama lafiya!\nItem ID: {item_id}")
+            admin_states.pop(ADMIN_ID, None)
 
     except Exception as e:
-        print("ADMIN INPUT ERROR:", e)
-        return
+        print("ADD MOVIE ERROR:", e)
+        bot.reply_to(message, "❌ Kuskure yayin add movie.")
+        admin_states.pop(ADMIN_ID, None)
 
 
-# ========== CANCEL ==========
+    # ========== CANCEL ==========
 @bot.message_handler(commands=["cancel"])
 def cancel_cmd(message):
-    if (
-        message.from_user.id == ADMIN_ID
-        and admin_states.get(ADMIN_ID)
-        and admin_states[ADMIN_ID].get("state") in ("weak_update", "update_week")
-    ):
+    if message.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID) and admin_states[ADMIN_ID].get("state") in ("weak_update", "update_week"):
         inst = admin_states[ADMIN_ID]
         inst_msg_id = inst.get("inst_msg_id")
-
         if inst_msg_id:
             try:
-                bot.delete_message(
-                    chat_id=ADMIN_ID,
-                    message_id=inst_msg_id
-                )
+                bot.delete_message(chat_id=ADMIN_ID, message_id=inst_msg_id)
             except Exception as e:
                 print("Failed to delete instruction message on cancel:", e)
-
         admin_states.pop(ADMIN_ID, None)
-        bot.reply_to(
-            message,
-            "An soke Update/Weak update kuma an goge sakon instruction."
-        )
+        bot.reply_to(message, "An soke Update/Weak update kuma an goge sakon instruction.")
         return
 
     if message.from_user.id == ADMIN_ID and admin_states.get(ADMIN_ID):
         admin_states.pop(ADMIN_ID, None)
-        bot.reply_to(
-            message,
-            "An soke aikin admin na yanzu."
-        )
+        bot.reply_to(message, "An soke aikin admin na yanzu.")
         return
-  
-
 
 # ==================================================
 # ========== GET CART (GROUP-AWARE SAFE) ============
@@ -3590,6 +3693,7 @@ ka tura wannan Order ID kai tsaye zuwa admin.</i>
         reply_markup=kb
     )
 
+
 # ========= GROUPITEM (ITEMS ONLY | DEEP LINK → DM) =========
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("/start groupitem_"))
 def groupitem_deeplink_handler(msg):
@@ -3627,9 +3731,10 @@ def groupitem_deeplink_handler(msg):
         bot.send_message(uid, "❌ Babu item mai file.")
         return
 
+    # 🔹 DISPLAY TITLE (SERIES NAME)
     display_title = items[0]["title"]
 
-    # 🛑 KARIYA 1: OWNERSHIP
+    # 🛑 KARIYA 1: OWNERSHIP (ITEM LEVEL ✔️)
     owned = conn.execute(
         f"""
         SELECT 1 FROM user_movies
@@ -3644,24 +3749,26 @@ def groupitem_deeplink_handler(msg):
         kb.add(InlineKeyboardButton("🎬 MY MOVIES", callback_data="my_movies"))
         bot.send_message(
             uid,
-            "✅ <b>Ka riga ka mallaki wannan fim.\nDUBA MY MOVIES domin sake karɓa kyauta.</b>",
+            "✅ <b>Ka riga ka mallaki wannan fim tini/n/n DUBA MY MOVIES\n Acen zaka rubuta sunansa za'a sake turama kyauta idan kana bukata.</b>",
             parse_mode="HTML",
             reply_markup=kb
         )
         return
 
     # ===============================
-    # ✅ TOTAL (GROUP-AWARE)
+    # ✅ TOTAL (GROUP-AWARE – PRICE 1)
     # ===============================
     groups = {}
+
     for i in items:
         key = i["group_key"] or f"single_{i['id']}"
+
         if key not in groups:
             groups[key] = int(i["price"] or 0)
 
     total = sum(groups.values())
 
-    # 🛑 KARIYA 2: UNPAID ORDER
+    # 🛑 KARIYA 2: UNPAID ORDER MAI WANNAN ITEMS (ITEM LEVEL ✔️)
     old = conn.execute(
         f"""
         SELECT o.id, o.amount
@@ -3699,19 +3806,18 @@ def groupitem_deeplink_handler(msg):
 
         conn.commit()
 
-    # ===============================
-    # ✅ SABON PAYMENT ATTEMPT (MUHIMMI)
-    # ===============================
-    payment_attempt = int(time.time())
-    title = display_title
-
-    pay_url = create_flutterwave_payment(
-        uid,
-        f"{order_id}-{payment_attempt}",  # 👈 sabon tx_ref, order ɗaya
-        total,
-        title
+    # 🧪 DEBUG
+    dbg = (
+        "🤩<b>SERIES ORDER CREATED</b>\n\n"
+        f"• {display_title}\n"
+        f"📦 Episodes: {len(items)}\n"
     )
 
+    bot.send_message(uid, dbg, parse_mode="HTML")
+
+    title = display_title
+
+    pay_url = create_flutterwave_payment(uid, order_id, total, title)
     if not pay_url:
         bot.send_message(uid, "❌ Payment error.")
         return
@@ -3731,13 +3837,13 @@ def groupitem_deeplink_handler(msg):
 <code>{order_id}</code>
 
 ⚠️ <b>MUHIMMI:</b>
-<i>Order ɗaya ne, amma kowane biyan kuɗi yana da sabon link.
-Idan matsala ta faru, tura Order ID zuwa admin.</i>
+<i>Ajiye wannan Order ID sosai.
+Idan wata matsala ta faru (biyan kudi ko delivery),
+ka tura wannan Order ID kai tsaye zuwa admin.</i>
 """,
         parse_mode="HTML",
         reply_markup=kb
     )
-
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("buy_again:"))
 def buy_again_handler(c):
@@ -3837,7 +3943,7 @@ def buy_again_handler(c):
     if len(items) > 1:
         dbg = (
             "🔁 <b>BUY AGAIN – GROUP ORDER</b>\n\n"
-            f"📦 Films: {len(items)}"
+            f"📦 Episodes: {len(items)}"
         )
     else:
         dbg = (
@@ -4035,13 +4141,14 @@ def buygroup_handler(c):
     bot.send_message(uid, dbg, parse_mode="HTML")
 
     # ===============================
-    # PAYMENT (SAFE – NEW LINK ALWAYS)
+    # PAYMENT
     # ===============================
+    tx_ref = f"{order_id}_{int(time.time())}"
     title = " / ".join({g["items"][0]["title"] for g in groups.values()})
 
     pay_url = create_flutterwave_payment(
         uid,
-        order_id,     # ⚠️ ORDER ƊAYA
+        tx_ref,
         total,
         title
     )
@@ -4472,13 +4579,12 @@ def pay_all_unpaid(call):
 
     bot.send_message(user_id, dbg, parse_mode="HTML")
 
-    # ================== FLUTTERWAVE (SAFE & CLEAN) ==================
-    # ⚠️ KAR A KIRKIRI tx_ref A NAN
-    # create_flutterwave_payment() ZAI YI HAKA DA KANSA
+    # ================== FLUTTERWAVE SAFE ==================
+    tx_ref = f"{new_order_id}_{int(time.time())}"
 
     pay_url = create_flutterwave_payment(
         user_id,
-        new_order_id,          # ORDER ƊAYA, LINK SABO
+        tx_ref,
         total_amount,
         "Pay All Orders"
     )
@@ -4574,14 +4680,14 @@ def _create_and_send_buyall(uid, items, c):
         kb.add(InlineKeyboardButton("🎬 MY MOVIES", callback_data="my_movies"))
         bot.send_message(
             uid,
-            "✅ <b>Ka riga ka mallaki wannan fim.\nDUBA MY MOVIES domin sake turawa kyauta.</b>",
+            "✅ <b>Ka riga ka mallaki wannan fim tini/n/n DUBA MY MOVIES\n Acen zaka rubuta sunansa za'a sake turama kyauta idan kana bukata.</b>",
             parse_mode="HTML",
             reply_markup=kb
         )
         bot.answer_callback_query(c.id)
         return
 
-    # 🛑 KARIYA 2: UNPAID ORDER MAI WANNAN ITEMS
+    # 🛑 KARIYA 2: UNPAID ORDER MAI WANNAN ITEMS (ITEM LEVEL ✔️)
     old = conn.execute(
         f"""
         SELECT o.id, o.amount
@@ -4621,13 +4727,13 @@ def _create_and_send_buyall(uid, items, c):
         conn.commit()
 
     # 🧪 DEBUG
-    dbg = "🤩 <b>BUY ALL ORDER CREATED</b>\n\n"
+    dbg = "🤩<b>BUY ALL ORDER CREATED</b>\n\n"
     for it in items:
         dbg += f"• {it['title']}\n"
 
     bot.send_message(uid, dbg, parse_mode="HTML")
 
-    # 💳 PAYMENT — SABON LINK KOYAUSHE
+    # 💳 PAYMENT
     pay_url = create_flutterwave_payment(uid, order_id, final_total, "Buy All Movies")
     if not pay_url:
         bot.answer_callback_query(c.id, "Payment error.")
@@ -4660,6 +4766,7 @@ ka tura wannan Order ID kai tsaye zuwa admin.</i>
 
     bot.send_message(uid, text, parse_mode="HTML", reply_markup=kb)
     bot.answer_callback_query(c.id)
+
 import uuid
 from datetime import datetime
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -5318,7 +5425,9 @@ def handle_callback(c):
 
 
     # ==================================================
-    # CHECKOUT (GROUP-AWARE – ORDER REUSE + NEW LINK)
+
+    # ==================================================
+    # CHECKOUT (GROUP-AWARE – FORMAT FIX ONLY)
     # ==================================================
     if data == "checkout":
         rows = get_cart(uid)
@@ -5326,6 +5435,7 @@ def handle_callback(c):
             bot.answer_callback_query(c.id, "❌ Cart ɗinka babu komai.")
             return
 
+        order_id = str(uuid.uuid4())
         total = 0
 
         # ===============================
@@ -5368,53 +5478,33 @@ def handle_callback(c):
             return
 
         # ===============================
-        # 🛑 CHECK EXISTING UNPAID ORDER
+        # 1️⃣ CREATE ORDER
         # ===============================
-        old = conn.execute(
+        conn.execute(
             """
-            SELECT id, amount
-            FROM orders
-            WHERE user_id=? AND paid=0
-            ORDER BY rowid DESC
-            LIMIT 1
+            INSERT INTO orders (id, user_id, movie_id, amount, paid)
+            VALUES (?, ?, NULL, ?, 0)
             """,
-            (uid,)
-        ).fetchone()
+            (order_id, uid, total)
+        )
 
-        if old:
-            order_id = old["id"]
-            total = old["amount"]
-        else:
-            order_id = str(uuid.uuid4())
+        # ===============================
+        # 2️⃣ ORDER ITEMS (ALL FILES)
+        # ===============================
+        for g in groups.values():
+            group_price = g["price"]
+            for item_id, title, file_id in g["items"]:
+                conn.execute(
+                    """
+                    INSERT INTO order_items
+                    (order_id, item_id, file_id, price)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (order_id, item_id, file_id, group_price)
+                )
 
-            # ===============================
-            # 1️⃣ CREATE ORDER
-            # ===============================
-            conn.execute(
-                """
-                INSERT INTO orders (id, user_id, movie_id, amount, paid)
-                VALUES (?, ?, NULL, ?, 0)
-                """,
-                (order_id, uid, total)
-            )
-
-            # ===============================
-            # 2️⃣ ORDER ITEMS (ALL FILES)
-            # ===============================
-            for g in groups.values():
-                group_price = g["price"]
-                for item_id, title, file_id in g["items"]:
-                    conn.execute(
-                        """
-                        INSERT INTO order_items
-                        (order_id, item_id, file_id, price)
-                        VALUES (?, ?, ?, ?)
-                        """,
-                        (order_id, item_id, file_id, group_price)
-                    )
-
-            conn.commit()
-            clear_cart(uid)
+        conn.commit()
+        clear_cart(uid)
 
         # ===============================
         # 🧾 CLEAN DISPLAY (NO DUPLICATE TITLES)
@@ -5438,7 +5528,7 @@ def handle_callback(c):
         bot.send_message(uid, dbg, parse_mode="HTML")
 
         # ===============================
-        # PAYMENT (NEW LINK ALWAYS)
+        # PAYMENT
         # ===============================
         pay_url = create_flutterwave_payment(uid, order_id, total, "Cart Order")
 
@@ -5471,9 +5561,7 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
         )
 
         bot.answer_callback_query(c.id)
-        return
-
-#==================================================
+        return     #==================================================
     # BUY / BUYDM
     # ==================================================
     if data.startswith("buy:") or data.startswith("buydm:"):
@@ -5527,7 +5615,7 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
             kb.add(InlineKeyboardButton("🎬 MY MOVIES", callback_data="my_movies"))
             bot.send_message(
                 uid,
-                "✅ <b>Ka riga ka mallaki wannan fim.\nDUBA MY MOVIES domin sake turawa kyauta.</b>",
+                "✅ <b>Ka riga ka mallaki wannan fim tini/n/n DUBA MY MOVIES\n Acen zaka rubuta sunansa za'a sake turama kyauta idan kana bukata.</b>",
                 parse_mode="HTML",
                 reply_markup=kb
             )
@@ -5551,7 +5639,6 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
             total = old["amount"]
         else:
             order_id = str(uuid.uuid4())
-
             conn.execute(
                 "INSERT INTO orders (id, user_id, amount, paid) VALUES (?, ?, 0, 0)",
                 (order_id, uid)
@@ -5579,14 +5666,14 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
 
             conn.commit()
 
-        # 🧪 DEBUG — BUY
+        # 🧪 DEBUG — BUY (BA ID)
         dbg = "🤩 <b>BUY ORDER CREATED</b>\n\n"
         for it in items:
             dbg += f"• {it['title']}\n"
 
         bot.send_message(uid, dbg, parse_mode="HTML")
 
-        # 4️⃣ PAYMENT (SABON LINK KOYAUSHE)
+        # 4️⃣ PAYMENT
         title = items[0]["title"] if len(items) == 1 else f"{len(items)} Items"
         pay_url = create_flutterwave_payment(uid, order_id, total, title)
 
@@ -5621,6 +5708,7 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
 
         bot.answer_callback_query(c.id)
         return
+
 
     # ================= MY MOVIES =================
     if data == "my_movies":
@@ -6012,7 +6100,17 @@ Ba za a iya taimakawa ba tare da Order ID ba.</i>
    
 
    
-   
+    # =====================
+    # ADD MOVIE (ADMIN)
+    # =====================
+    if data == "addmovie":
+        if uid != ADMIN_ID:
+            bot.answer_callback_query(c.id, "Only admin.")
+            return
+        admin_states[uid] = {"state": "add_movie_wait_file"}
+        bot.send_message(uid, "Turo film.")
+        bot.answer_callback_query(c.id)
+        return
     # =====================
     # WEEKLY BUY
     # =====================
