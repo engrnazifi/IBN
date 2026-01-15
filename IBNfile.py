@@ -360,49 +360,30 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 # ========= FLASK =========
 app = Flask(__name__)
 
-
 import uuid
 import requests
-import json
 
-# ========= FLUTTERWAVE PAYMENT (TELEGRAM DEBUG) =========
+# ========= FLUTTERWAVE PAYMENT (CLEAN) =========
 def create_flutterwave_payment(user_id, order_id, amount, title):
-    logs = []
-    def log(x):
-        logs.append(str(x))
-
-    log("🧪 FLUTTERWAVE DEBUG START")
-
-    # 🔍 ENV CHECK
-    log(f"SECRET KEY OK: {bool(FLW_SECRET_KEY)}")
-    log(f"REDIRECT URL: {FLW_REDIRECT_URL}")
-    log(f"FLW BASE: {FLW_BASE}")
-
     if not FLW_SECRET_KEY or not FLW_REDIRECT_URL:
-        bot.send_message(user_id, "❌ ENV MISSING")
         return None
 
-    # 🔍 AMOUNT CHECK
     try:
         amount = int(amount)
-    except Exception as e:
-        bot.send_message(user_id, f"❌ AMOUNT CAST ERROR: {e}")
+    except:
         return None
 
-    log(f"AMOUNT: ₦{amount}")
-
+    # 🛑 Flutterwave minimum (NGN)
     if amount < 100:
-        bot.send_message(user_id, "❌ Flutterwave minimum is ₦100")
         return None
-
-    # 🔐 UNIQUE tx_ref
-    tx_ref = f"tg_{uuid.uuid4().hex}"
-    log(f"TX_REF: {tx_ref}")
 
     headers = {
         "Authorization": f"Bearer {FLW_SECRET_KEY}",
         "Content-Type": "application/json"
     }
+
+    # 🔐 UNIQUE tx_ref (SAFE – NO COLLISION)
+    tx_ref = f"tg_{uuid.uuid4().hex}"
 
     payload = {
         "tx_ref": tx_ref,
@@ -419,9 +400,6 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
         }
     }
 
-    log("PAYLOAD:")
-    log(json.dumps(payload, indent=2))
-
     try:
         r = requests.post(
             f"{FLW_BASE}/payments",
@@ -430,35 +408,18 @@ def create_flutterwave_payment(user_id, order_id, amount, title):
             timeout=30
         )
 
-        log(f"STATUS CODE: {r.status_code}")
-        log("RAW RESPONSE:")
-        log(r.text)
-
-        data = r.json()
-        log("PARSED RESPONSE:")
-        log(json.dumps(data, indent=2))
-
-        # 📤 SEND DEBUG TO TELEGRAM
-        bot.send_message(
-            user_id,
-            "```\n" + "\n".join(logs) + "\n```",
-            parse_mode="Markdown"
-        )
-
-        if r.status_code != 200 or data.get("status") != "success":
-            bot.send_message(user_id, "❌ Flutterwave rejected payment")
+        if r.status_code != 200:
             return None
 
-        bot.send_message(user_id, "✅ Payment link created successfully")
+        data = r.json()
+        if data.get("status") != "success":
+            return None
+
         return data["data"]["link"]
 
-    except Exception as e:
-        bot.send_message(
-            user_id,
-            f"❌ REQUEST ERROR:\n```\n{e}\n```",
-            parse_mode="Markdown"
-        )
+    except:
         return None
+
 
 # ========= HOME / KEEP ALIVE =========
 @app.route("/")
